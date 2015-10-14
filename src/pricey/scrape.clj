@@ -1,4 +1,7 @@
-(ns pricey.core
+(ns pricey.scrape
+  "Web scraper for AWS instance and pricing info.
+
+  Based off of <https://github.com/powdahound/ec2instances.info>"
   (require [hickory.core :refer :all]
            [hickory.select :as s]
            [clj-http.client :as client]
@@ -6,21 +9,20 @@
            [cheshire.core :as json])
   (:gen-class))
 
-(defn parse-int
+(defn- parse-int
   [s]
   (try
     (Integer/parseInt s)
     (catch Exception x nil)))
 
-(defn parse-double
+(defn- parse-double
   [s]
   (try
     (Double/parseDouble s)
     (catch Exception x nil)))
 
-(defn fetch-data
+(defn- fetch-data
   [url]
-  (println "fetching" url)
   (let [data (:body (client/get url))]
     (try
       (json/parse-string data)
@@ -30,7 +32,7 @@
                                        (- (.length data) 2))
                            #"(\w+):" "\"$1\":"))))))
 
-(defn parse-prevgen-instance
+(defn- parse-prevgen-instance
   [row]
   (let [cols (s/select (s/child (s/tag :td)) row)
         family (-> (first cols) :content first str/trim)
