@@ -266,9 +266,18 @@
             by-type
             pricing)))
 
+;; TODO
+(def add-eni-info identity)
+(def add-ebs-info identity)
+(def add-linux-ami-info identity)
+
 (defn scrape
-  [outfile]
-  (let [all-instances (add-pricing-info (scrape-instances))]))
+  []
+  (-> (scrape-instances)
+      add-pricing-info
+      add-eni-info
+      add-ebs-info
+      add-linux-ami-info))
 
 (defn -main
   "I don't do a whole lot ... yet."
