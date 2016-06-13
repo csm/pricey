@@ -32,6 +32,19 @@
                                        (- (.length data) 2))
                            #"(\w+):" "\"$1\":"))))))
 
+(defn- fix-region
+  [region]
+  (let [region-map {"eu-ireland"   "eu-west-1"
+                    "eu-frankfurt" "eu-central-1"
+                    "apac-sin"     "ap-southeast-1"
+                    "apac-syd"     "ap-southeast-2"
+                    "apac-tokyo"   "ap-northeast-1"}]
+    (if-let [r (get region-map region)]
+      r
+      (if-let [m (re-matches #"^([^0-9]*)(-(\d))?$" region)]
+        (str (second m) "-" (or (nth m 3) "1"))
+        region))))
+
 (defn- parse-prevgen-instance
   [row]
   (let [cols (s/select (s/child (s/tag :td)) row)
@@ -234,7 +247,7 @@
      (for [region        (-> pricing-info (get "config") (get "regions"))
            instance-type (get region "instanceTypes")
            term          (get instance-type "terms")]
-       (let [region-name (keyword (get region "region"))
+       (let [region-name (keyword (fix-region (get region "region")))
              size-name   (keyword (get instance-type "type"))]
          (swap! result (fn [res] (update-in res [size-name :pricing platform region-name]
                                             (fn [m] (merge m (fetch-prices term)))))))))
@@ -279,7 +292,35 @@
       add-ebs-info
       add-linux-ami-info))
 
-(defn -main
-  "I don't do a whole lot ... yet."
-  [& args]
-  (println "Hello, World!"))
+(defn- map-ebs-name
+  [name]
+  (cond
+   (.contains (str/lower-case name) "general purpose") :gp2
+   (.contains (str/lower-case name) "provisioned iops") :io1
+   (.contains (str/lower-case name) "magnetic") :standard
+   (.contains (str/lower-case name) "ebssnaps") :snapshot))
+
+(defn map-ebs-rate
+  [rate]
+  (cond
+   (= "perGBmoProvStorage" rate) :gb-month
+   (= "perPIOPSreq" rate)        :provisioned-iops
+   (= "perMMIOreq" rate)         :million-ios
+   (= "perGBmoDataStored" rate)  :gb-month))
+
+(defn scrape-ebs
+  []
+  (let [data (fetch-data "https://a0.awsstatic.com/pricing/1/ebs/pricing-ebs.min.js")]
+    (into {}
+          (map (fn [region]
+                 [(keyword (fix-region (get region "region")))
+                  (into {}
+                        (map (fn [t]
+                               [(map-ebs-name (get t "name"))
+                                (into {}
+                                      (map (fn [value]
+                                             [(map-ebs-rate (get value "rate"))
+                                              (-> value (get "prices") (get "USD") parse-double)])
+                                           (get t "values")))])
+                             (get region "types")))])
+               (-> data (get "config") (get "regions"))))))
