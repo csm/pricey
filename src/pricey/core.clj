@@ -1,5 +1,6 @@
 (ns pricey.core
-  (require [pricey.inventory :as inventory]
+  (require [amazonica.core :refer [with-credential]]
+           [pricey.inventory :as inventory]
            [pricey.scrape :as scrape]
            [clojure.tools.cli :as cli]
            [clojure.pprint :refer [print-table]]))
@@ -9,7 +10,8 @@
   (let [reservations (inventory/fetch-reservations creds)
         pricing-info (scrape/scrape)
         ebs-pricing-info (scrape/scrape-ebs)
-        costs (inventory/get-app-costs reservations pricing-info ebs-pricing-info)]
+        costs (with-credential creds
+                (inventory/get-app-costs reservations pricing-info ebs-pricing-info))]
     costs))
 
 (def cli-options
@@ -20,7 +22,17 @@
    ["-h" "--hourly" "Display hourly costs (default)."]
    ["-d" "--daily" "Display daily costs."]
    ["-m" "--monthly" "Display monthly costs (assumes 31 days/month)."]
-   ["-?" "--help" "Show this help and exit."]])
+   ["-u" "--list-unknown" "List instances that don't have a known application/stack."]
+   [nil "--help" "Show this help and exit."]])
+
+(defn- name-or-tag
+  [instance]
+  (let [tags (:tags instance)]
+    (if-let [name-tag (first (filter #(= (:key %) "Name") tags))]
+      (:value name-tag)
+      (if-let [asg-tag (first (filter #(= (:key %) "aws:autoscaling:groupName") tags))]
+        (:value asg-tag)
+        (or (:value (first tags)) "-")))))
 
 (defn -main
   [& args]
@@ -29,6 +41,8 @@
         creds (merge {:endpoint (:region options)}
                      (select-keys options [:profile :access-key :secret-key]))]
     (when (:help options)
+      (println "usage: pricey.core/-main [options]")
+      (println)
       (println (:summary opts))
       (System/exit 0))
     (let [factor (cond
@@ -46,4 +60,17 @@
                  [{"App" "Total" "Stack" "-"
                    "EC2 Cost" (format "$ %.2f" (double (* factor (:ec2 totals))))
                    "EBS Cost" (format "$ %.2f" (double (* factor (:ebs totals))))}])]
-      (print-table table))))
+      (print-table table))
+    (when (:list-unknown options)
+      (let [reservations (inventory/fetch-reservations creds)
+            results (filter #(not (nil? %))
+                            (for [reservation reservations
+                                  instance (:instances reservation)]
+                              (if (nil? (inventory/get-app-name instance))
+                                {"Instance" (:instance-id instance)
+                                 "Type" (:instance-type instance)
+                                 "Name/ASG" (name-or-tag instance)}
+                                nil)))]
+        (when (not (empty? results))
+          (println "Instances with no app/stack info found:")
+          (print-table results))))))

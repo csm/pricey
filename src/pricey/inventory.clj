@@ -12,7 +12,7 @@
       (Names/parseName asg-name)
       nil)))
 
-(defn- get-app-name
+(defn get-app-name
   "Inspect an instance, return its app name (*if* it is managed by Asgard).
 
   Returns nil if the app name cannot be determined."

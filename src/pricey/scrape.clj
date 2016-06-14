@@ -294,11 +294,14 @@
 
 (defn- map-ebs-name
   [name]
-  (cond
-   (.contains (str/lower-case name) "general purpose") :gp2
-   (.contains (str/lower-case name) "provisioned iops") :io1
-   (.contains (str/lower-case name) "magnetic") :standard
-   (.contains (str/lower-case name) "ebssnaps") :snapshot))
+  (let [n (str/lower-case name)]
+    (cond
+      (.contains n "general purpose") :gp2
+      (.contains n "provisioned iops") :io1
+      (.contains n "magnetic") :standard
+      (.contains n "ebssnaps") :snapshot
+      (.contains n "throughput optimized") :st1
+      (.contains n "cold hdd") :sc1)))
 
 (defn map-ebs-rate
   [rate]
@@ -308,9 +311,15 @@
    (= "perMMIOreq" rate)         :million-ios
    (= "perGBmoDataStored" rate)  :gb-month))
 
-(defn scrape-ebs
-  []
-  (let [data (fetch-data "https://a0.awsstatic.com/pricing/1/ebs/pricing-ebs.min.js")]
+(defn combine
+  [& vals]
+  (if (every? map? vals)
+    (apply merge-with combine vals)
+    (last vals)))
+
+(defn- parse-ebs-pricing
+  [url]
+  (let [data (fetch-data url)]
     (into {}
           (map (fn [region]
                  [(keyword (fix-region (get region "region")))
@@ -324,3 +333,8 @@
                                            (get t "values")))])
                              (get region "types")))])
                (-> data (get "config") (get "regions"))))))
+
+(defn scrape-ebs
+  []
+  (combine (parse-ebs-pricing "https://a0.awsstatic.com/pricing/1/ebs/pricing-ebs.min.js")
+           (parse-ebs-pricing "https://a0.awsstatic.com/pricing/1/ebs/pricing-ebs-previous-generation.min.js")))
