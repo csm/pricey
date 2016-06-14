@@ -1,7 +1,8 @@
 (ns pricey.core
   (require [pricey.inventory :as inventory]
            [pricey.scrape :as scrape]
-           [clojure.tools.cli :as cli]))
+           [clojure.tools.cli :as cli]
+           [clojure.pprint :refer [print-table]]))
 
 (defn prices
   [creds]
@@ -34,10 +35,15 @@
                    (:monthly options) (* 24 31)
                    (:daily options) 24
                    :else 1)
-          costs (prices creds)]
-      (println "App\tStack\tEC2 Cost\tEBS cost")
-      (doseq [p costs]
-        (println (if (nil? (first p)) "none" (first (first p))) "\t"
-                 (if (nil? (first p)) "none" (second (first p))) "\t$"
-                 (* factor (:ec2 (second p))) "\t$"
-                 (* factor (:ebs (second p))))))))
+          costs (sort (fn [a b] (compare (first a) (first b))) (prices creds))
+          totals (reduce (fn [a b] {:ec2 (+ (:ec2 a) (:ec2 b)) :ebs (+ (:ebs a) (:ebs b))})
+                         (map second costs))
+          table (concat
+                 (map (fn [e] {"App" (name (or (first (first e)) :none))
+                               "Stack" (name (or (second (first e)) :none))
+                               "EC2 Cost" (format "$ %.2f" (double (* factor (:ec2 (second e)))))
+                               "EBS Cost" (format "$ %.2f" (double (* factor (:ebs (second e)))))}) costs)
+                 [{"App" "Total" "Stack" "-"
+                   "EC2 Cost" (format "$ %.2f" (double (* factor (:ec2 totals))))
+                   "EBS Cost" (format "$ %.2f" (double (* factor (:ebs totals))))}])]
+      (print-table table))))
