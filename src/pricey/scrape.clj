@@ -137,7 +137,7 @@
                  :body
                  parse
                  as-hickory)
-        details (s/select (s/child (s/tag :div) (s/class "informaltable") (s/tag :table)) tree)
+        details (s/select (s/child (s/tag :div) (s/class "informaltable-contents") (s/tag :table)) tree)
         current-gen-hdrs (flatten (map :content (s/select (s/child (s/tag :thead) (s/tag :tr) (s/tag :th)) (first details))))
         current-gen (when (and (.equalsIgnoreCase (first current-gen-hdrs) "instance family")
                                (.contains (.toLowerCase (second current-gen-hdrs)) "current generation"))
@@ -155,7 +155,7 @@
                  :body
                  parse
                  as-hickory)
-        details (nth (s/select (s/child (s/tag :table)) tree) 9)
+        details (nth (s/select (s/child (s/tag :table)) tree) 10)
         rows (rest (s/select (s/child (s/tag :tbody) (s/tag :tr)) details))
         current-gen (map (partial parse-instance inst2family) rows)
         prevgen-tree (-> (client/get "http://aws.amazon.com/ec2/previous-generation/")

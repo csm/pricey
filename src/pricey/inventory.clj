@@ -104,3 +104,8 @@
               (filter (fn [instance] (acceptor (get-names instance)))
                       (:instances reservation))))
           reservations))
+
+(defn fetch-reservations
+  [creds]
+  (:reservations (ec2/describe-instances creds)))
+
