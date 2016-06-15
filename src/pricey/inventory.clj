@@ -1,6 +1,7 @@
 (ns pricey.inventory
   (require [amazonica.aws.ec2 :as ec2]
-           [clojure.tools.logging :as log])
+           [clojure.tools.logging :as log]
+           [pricey.util :as u])
   (import [com.netflix.frigga Names]))
 
 (defn- get-names
@@ -33,16 +34,19 @@
 (defn get-ebs-pricing
   "Fetch all EBS volumes attached to an instance, and estimate the hourly cost
    of those volumes."
-  [instance ebs-pricing-info]
+  [instance ebs-pricing-info volume-info]
   (let [volume-ids (map (fn [v] (-> v :ebs :volume-id))
                         (filter (fn [bdm] (:ebs bdm)) (:block-device-mappings instance)))
-        volumes (flatten
-                 (map (fn [volume-id]
-                        (Thread/sleep 250) ; avoid throttling ヽ(´ー｀)ノ
-                        (try
-                          (:volumes (ec2/describe-volumes :volume-ids [volume-id]))
-                          (catch Exception _ [])))
-                      volume-ids))]
+        volumes (filter #(not (nil? %)) (map volume-info volume-ids))
+        ;; volumes (flatten
+        ;;          (map (fn [volume-id]
+        ;;                 ;(Thread/sleep 250) ; avoid throttling ヽ(´ー｀)ノ
+        ;;                 (u/try-with-backoff 10 10
+        ;;                                     (try
+        ;;                                       (:volumes (ec2/describe-volumes :volume-ids [volume-id]))
+        ;;                                       (catch Exception _ []))))
+        ;;               volume-ids))
+        ]
     (/ (reduce (fn [sum volume]
                  (let [size (float (:size volume))
                        volume-type (keyword (:volume-type volume))
@@ -65,14 +69,17 @@
        )))
 
 (defn get-instance-cost
-  [instance pricing-info ebs-pricing-info]
+  [instance pricing-info ebs-pricing-info volumes]
   (let [instance-type (keyword (:instance-type instance))
         zone (-> instance :placement :availability-zone)
         region (keyword (.substring zone 0 (dec (count zone))))
         platform :linux
-        allocation-type :on-demand] ; FIXME, there should be a way to figure this out.
-    [(get-app-name instance) {:ec2 (-> pricing-info instance-type :pricing platform region allocation-type)
-                              :ebs (get-ebs-pricing instance ebs-pricing-info)}]))
+        allocation-type :on-demand  ; FIXME, there should be a way to figure this out.
+        is-running (= "running" (:name (:state instance)))]
+    [(get-app-name instance) {:ec2 (if is-running
+                                     (-> pricing-info instance-type :pricing platform region allocation-type)
+                                     0.0)
+                              :ebs (get-ebs-pricing instance ebs-pricing-info volumes)}]))
 
 (defn- sum-pricings
   "Sum two dicts of keys->numbers."
@@ -83,12 +90,12 @@
    b))
 
 (defn get-app-costs
-  [reservations pricing-info ebs-pricing-info]
+  [reservations pricing-info ebs-pricing-info volumes]
   (let [result (atom {})]
     (doall
      (for [reservation reservations
            instance (:instances reservation)]
-       (let [[app-id cost] (get-instance-cost instance pricing-info ebs-pricing-info)]
+       (let [[app-id cost] (get-instance-cost instance pricing-info ebs-pricing-info volumes)]
          (swap! result #(update-in % [app-id] sum-pricings cost)))))
     @result))
 
@@ -109,3 +116,13 @@
   [creds]
   (:reservations (ec2/describe-instances creds)))
 
+(defn fetch-volume-info
+  [creds reservations]
+  (into {}
+        (map (fn [e] [(:volume-id e) e])
+             (:volumes (ec2/describe-volumes
+                        creds
+                        :volume-ids
+                        (map #(-> (:ebs %) (:volume-id))
+                             (flatten (map :block-device-mappings
+                                           (flatten (map :instances reservations))))))))))

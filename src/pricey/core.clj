@@ -3,7 +3,8 @@
            [pricey.inventory :as inventory]
            [pricey.scrape :as scrape]
            [clojure.tools.cli :as cli]
-           [clojure.pprint :refer [print-table]]))
+           [pricey.util :refer [print-table]]
+           [clansi :refer [style]]))
 
 (defn prices
   [creds]
@@ -23,6 +24,8 @@
    ["-d" "--daily" "Display daily costs."]
    ["-m" "--monthly" "Display monthly costs (assumes 31 days/month)."]
    ["-u" "--list-unknown" "List instances that don't have a known application/stack."]
+   ["-c" "--color" "Use ANSI color codes when printing"]
+   ["-v" "--verbose" "Print messages about progress."]
    [nil "--help" "Show this help and exit."]])
 
 (defn- name-or-tag
@@ -49,7 +52,18 @@
                    (:monthly options) (* 24 31)
                    (:daily options) 24
                    :else 1)
-          costs (sort (fn [a b] (compare (first a) (first b))) (prices creds))
+          _ (if (:verbose options) (println (style "Fetching all reservations..." :green)))
+          reservations (inventory/fetch-reservations creds)
+          _ (if (:verbose options) (println (style "Fetching all volumes..." :green)))
+          volumes (inventory/fetch-volume-info creds reservations)
+          _ (if (:verbose options) (println (style "Fetching EC2 pricing info..." :green)))
+          pricing-info (scrape/scrape)
+          _ (if (:verbose options) (println (style "Fetching EBS pricing info..." :green)))
+          ebs-pricing-info (scrape/scrape-ebs)
+          _ (if (:verbose options) (println (style "Computing app/stack costs..." :green)))
+          costs (sort (fn [a b] (compare (first a) (first b)))
+                      (with-credential creds
+                        (inventory/get-app-costs reservations pricing-info ebs-pricing-info volumes)))
           totals (reduce (fn [a b] {:ec2 (+ (:ec2 a) (:ec2 b)) :ebs (+ (:ebs a) (:ebs b))})
                          (map second costs))
           table (concat
@@ -60,17 +74,22 @@
                  [{"App" "Total" "Stack" "-"
                    "EC2 Cost" (format "$ %.2f" (double (* factor (:ec2 totals))))
                    "EBS Cost" (format "$ %.2f" (double (* factor (:ebs totals))))}])]
-      (print-table table))
-    (when (:list-unknown options)
-      (let [reservations (inventory/fetch-reservations creds)
-            results (filter #(not (nil? %))
+      (print-table table :colorize? (:color options))
+      (when (:list-unknown options)
+        (let [_ (if (:verbose options) (println (style "Computing non-app instance costs..." :gray)))
+              results (filter #(not (nil? %))
                             (for [reservation reservations
                                   instance (:instances reservation)]
                               (if (nil? (inventory/get-app-name instance))
-                                {"Instance" (:instance-id instance)
-                                 "Type" (:instance-type instance)
-                                 "Name/ASG" (name-or-tag instance)}
+                                (let [cost (second
+                                            (with-credential creds
+                                              (inventory/get-instance-cost instance pricing-info ebs-pricing-info volumes)))]
+                                  {"Instance" (:instance-id instance)
+                                   "Type" (:instance-type instance)
+                                   "Name/ASG" (name-or-tag instance)
+                                   "EC2 Cost" (format "$ %.2f" (double (* factor (or (:ec2 cost) 0.0))))
+                                   "EBS Cost" (format "$ %.2f" (double (* factor (or (:ebs cost) 0.0))))})
                                 nil)))]
         (when (not (empty? results))
           (println "Instances with no app/stack info found:")
-          (print-table results))))))
+          (print-table results :colorize? (:color options))))))))
